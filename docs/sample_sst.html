@@ -1,0 +1,178 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="https://github.githubassets.com/favicon.ico">
+    <title>cpdjs sst sample</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="../cpd.min.js"></script>
+</head>
+
+<body>
+    <form id="form">
+      <div>
+        <textarea id="data" rows="10" cols="100" placeholder="1,2,3,4,5" required>
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,40,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1,
+1,2,30,1,1,2,1,0,0,1
+1,2,1,1,1,2,1,0,0,1,
+1,2,1,1,1,2,1,0,0,1
+        </textarea>
+      </div>
+      <div><label for="window">window</label> <input id="window" type="number" min="1" step="1" required value="20"></div>
+      <div><label for="lag">lag (default: 5)</label> <input id="lag" type="number" min="1" step="1"></div>
+      <div><label for="trajectory_k">trajectory k (default: 10)</label> <input id="trajectory_k" type="number" min="1" step="1"></div>
+      <div><label for="trajectory_m">trajectory m (default: 2)</label> <input id="trajectory_m" type="number" min="1" step="1"></div>
+      <div><label for="test_k">test k (default: 10)</label> <input id="test_k" type="number" min="1" step="1"></div>
+      <div><label for="test_m">test m (default: 2)</label> <input id="test_m" type="number" min="1" step="1"></div>
+      <div><label for="neighbor">neighbor (default: 10)</label> <input id="neighbor" type="number" min="1" step="1"></div>
+      <dl>
+        <dt>threshold</dt>
+        <dd>
+          <div><input id="none" name="threshold" type="radio" value="no" checked><label for="non">no use.</label></div>
+          <div><input id="max" name="threshold" type="radio" value="max"><label for="max">use "0.7 * max" for threshold.</label></div>
+          <div><input id="iqr" name="threshold" type="radio" value="iqr"><label for="iqr">use "3rd quartile + 1.5 * quartile range" for threshold.</label></div>
+        </dd>
+      </dl>
+      <button type="submit">exec!</button>
+    </form>
+    <hr>
+    <div id="result" style="display: none;">
+      <canvas id="chart_input"></canvas>
+      <p id="error"></p>
+      <canvas id="chart_score"></canvas>
+    </div>
+    <script>
+      function getNumber(id) {
+        const value = document.getElementById(id).value;
+        if(value === "") return undefined
+        return Number(value)
+      }
+      let chartChartInput, chartChartAnomaly;
+
+      const defaultValue = {
+        lag: 5,
+        trajectorySize: 5,
+        trajectoryPattern: 2,
+        testSize: 5,
+        testPattern: 2,
+      }
+      const error = document.getElementById("error");
+      document.getElementById("form").addEventListener('submit', function(e){
+        e.preventDefault();
+        document.getElementById("result").style.display = "block";
+
+        const data = document.getElementById("data").value.replace(/\r?\n/g, ",").split(",")
+        .filter(function(v){
+          return v.trim().length > 0;
+        })
+        .map(function(v){
+          return Number(v);
+        });
+        const windowSize = getNumber("window");
+        const lag = getNumber("lag");
+        const trajectorySize = getNumber("trajectory_k");
+        const trajectoryPattern = getNumber("trajectory_m");
+        const testSize = getNumber("test_k");
+        const testPattern = getNumber("test_m");
+
+        const labels = data.map(function(_,i){
+          return i
+        });
+        if(chartChartInput) chartChartInput.destroy();
+        chartChartInput = new Chart(document.getElementById("chart_input").getContext('2d'), {
+          type: 'line',
+          data: {
+            labels,
+            datasets:  [
+              {
+                label: "Input Data",
+                data,
+              }
+            ]
+          },
+        });
+
+        try {
+          const result = cpd.sst.score(data, windowSize, {
+            lag: lag || defaultValue.lag,
+            trajectory: {
+              k: trajectorySize || defaultValue.trajectorySize,
+              m: trajectoryPattern || defaultValue.trajectoryPattern,
+            },
+            test: {
+              k: testSize || defaultValue.testSize,
+              m: testPattern || defaultValue.testPattern
+            }
+          });
+
+
+          const neighbor = getNumber("neighbor");
+          const useThreshold = document.querySelector("[name=threshold]:checked")?.value;
+          let threshold;
+          switch(useThreshold) {
+            case "iqr" : {
+              const quartile = cpd.peek.quartile(result);
+              threshold = quartile.third + quartile.iqr * 1.5;
+              break; 
+            }
+            case "max" : {
+              const quartile = cpd.peek.quartile(result);
+              threshold = 0.7 * quartile.max;
+              break; 
+            }
+          }
+          const peeks = cpd.peek.find(result, {
+            neighbor,
+            threshold
+          });
+
+          const pointRadius = peeks.map((v)=>{
+            return v ? 6: 3;
+          })
+          const pointBorderWidth = peeks.map((v)=>{
+            return v ? 2: 1;
+          })
+          const pointBorderColor = peeks.map((v)=>{
+            return v ? 'rgba(255,0,0,0.7)': 'rgba(0,0,0,0.1)';
+          })
+          error.innerText = "";
+
+          if(chartChartAnomaly) chartChartAnomaly.destroy();
+          chartChartAnomaly = new Chart(document.getElementById("chart_score").getContext('2d'), {
+            type: 'line',
+            data: {
+              labels,
+              datasets:  [
+                {
+                  label: "Anomaly Score",
+                  data: result,
+                  pointRadius,
+                  pointBorderWidth,
+                  pointBorderColor
+                }
+              ]
+            },
+          });
+        } catch(e){
+          error.innerText = e.message;
+          const ctx = document.getElementById("chart_score").getContext('2d');
+          ctx.clearRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
+        }
+      })
+    </script>
+</body>
+</html>
